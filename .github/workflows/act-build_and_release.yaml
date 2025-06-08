@@ -512,7 +512,7 @@ jobs:
       - name: check 1 icon file location before create exe installer
         continue-on-error: true
         shell: cmd
-        run: \
+        run: |
          dir C:\
          dir C:\a
          dir C:\a\Tauon
@@ -525,7 +525,7 @@ jobs:
       - name: check 2 icon file location before create exe installer
         continue-on-error: true
         shell: cmd
-        run: \
+        run: |
          dir D:\
          dir D:\a
          dir D:\a\Tauon
@@ -538,7 +538,7 @@ jobs:
       - name: find TauonMusicBox\_internal\assets\icon.ico
         continue-on-error: true
         shell: msys2 {0}
-        run: \
+        run: |
           find /c/a/ | grep TauonMusicBox.*icon.ico || true;
           find /d/a/ | grep TauonMusicBox.*icon.ico || true;
 
@@ -613,18 +613,18 @@ jobs:
 
       - name: Process template release_body.md
         run: |
-          sed -i 's|RELEASE_TAG|Pre-release-Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}|g' ${{ github.workspace }}/.github/release_body.md
+          sed -i 's|RELEASE_TAG|Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}|g' ${{ github.workspace }}/.github/release_body.md
 
 
-      - name: Create Pre-Release on GitHub
+      - name: Create Release on GitHub
         id: create_release
         uses: ncipollo/release-action@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          name: "Pre-release-Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}"
-          tag: "Pre-release-Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}"
+          name: "Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}"
+          tag:  "Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}"
           draft: false
-          prerelease: true
+          prerelease: false
           #body: "Full Changelog: [${{ env.last_release_tag }}...${{ needs.get-info.outputs.shorthash }}](https://github.com/deep-soft/Tauon/compare/${{ env.last_release_tag }}...${{ needs.get-info.outputs.fullhash }})"
           bodyFile: ${{ github.workspace }}/.github/release_body.md
           artifacts: ~/artifacts/*.zip
@@ -640,17 +640,17 @@ jobs:
             filename=$(basename "$file")
             # Check if release already exists and get ID
             release_id=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              "https://api.github.com/repos/$REPO/releases/tags/Pre-release-Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}" | jq -r '.id')
+              "https://api.github.com/repos/$REPO/releases/tags/Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}" | jq -r '.id')
 
             if [[ "$release_id" == "null" ]]; then
               echo "Creating release in $REPO for $filename"
               release_id=$(curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
                 -H "Accept: application/vnd.github.v3+json" \
                 -d '{
-                  "tag_name": "Pre-release-Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}",
-                  "name": "Pre-release-Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}",
+                  "tag_name": "Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}",
+                  "name": "Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}",
                   "draft": false,
-                  "prerelease": true,
+                  "prerelease": false,
                   "body": "Commit: [${{ needs.get-info.outputs.fullhash }}](https://github.com/deep-soft/Tauon/commit/${{ needs.get-info.outputs.fullhash }})"
                 }' "https://api.github.com/repos/$REPO/releases" | jq -r '.id')
             else
@@ -663,7 +663,7 @@ jobs:
             curl -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Content-Type: application/octet-stream" --data-binary @"$file" "$upload_url"
           done
 
-      - name: Get current pre-release information
+      - name: Get current release information
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -672,50 +672,11 @@ jobs:
           # Get all releases (sorted by date)
           releases=$(curl -H "Authorization: token $GITHUB_TOKEN" "$api_url")
 
-          # Capture the most recent pre-release (assuming the first one is the latest)
-          current_release=$(echo "$releases" | jq -c '.[] | select(.prerelease == true) | .published_at' | sort -r | head -n 1)
+          # Capture the most recent release (assuming the first one is the latest)
+          current_release=$(echo "$releases" | jq -c '.[] | select(.prerelease == false) | .published_at' | sort -r | head -n 1)
 
           # Remove extra quotes from captured date
           current_release=$(echo $current_release | tr -d '"')
 
           # Export the current published_at to be available for the next step
           echo "CURRENT_PUBLISHED_AT=$current_release" >> $GITHUB_ENV
-
-      - name: Delete old pre-releases and tags
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          api_url="https://api.github.com/repos/${{ github.repository }}/releases"
-
-          # Get current pre-releases
-          releases=$(curl -H "Authorization: token $GITHUB_TOKEN" "$api_url")
-
-          # Remove extra quotes from captured date
-          CURRENT_PUBLISHED_AT=$(echo $CURRENT_PUBLISHED_AT | tr -d '"')
-
-          # Convert CURRENT_PUBLISHED_AT para timestamp Unix
-          current_published_ts=$(date -d "$CURRENT_PUBLISHED_AT" +%s)
-
-          # Identify pre-releases
-          echo "$releases" | jq -c '.[] | select(.prerelease == true)' | while read -r release; do
-            release_date=$(echo "$release" | jq -r '.published_at')
-            release_id=$(echo "$release" | jq -r '.id')
-            release_tag=$(echo "$release" | jq -r '.tag_name')
-
-            # Remove extra quotes from captured date
-            release_date=$(echo $release_date | tr -d '"')
-
-            # Convert release_date para timestamp Unix
-            release_date_ts=$(date -d "$release_date" +%s)
-
-            # Compare timestamps and delete old pre-releases
-            if [[ "$release_date_ts" -lt "$current_published_ts" ]]; then
-              echo "Deleting old pre-release: $release_id from $release_date with tag: $release_tag"
-              # Delete the pre-release
-              curl -X DELETE -H "Authorization: token $GITHUB_TOKEN" "$api_url/$release_id"
-              # Delete the tag
-              curl -X DELETE -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${{ github.repository }}/git/refs/tags/$release_tag"
-            else
-              echo "Skipping pre-release: $release_id (newer or same date)"
-            fi
-          done
