@@ -459,12 +459,15 @@ jobs:
           pip install --prefix ".venv" dist/*.whl
 
       # https://github.com/Taiko2k/Tauon/pull/931#issuecomment-1464880133
-      - name: Download optionals from latest release files and notofonts' GitHub
+      - name: Download optionals files and notofonts' GitHub
         shell: msys2 {0}
         run: |
-          curl -L -o librespot.exe  https://github.com/Taiko2k/Tauon/releases/download/v7.8.3/librespot.exe # v0.6.0 - https://github.com/librespot-org/librespot/releases
-          curl -L -o TaskbarLib.tlb https://github.com/Taiko2k/Tauon/releases/download/v7.8.3/TaskbarLib.tlb
-          curl -L -o TauonSMTC.dll  https://github.com/Taiko2k/Tauon/releases/download/v7.8.3/TauonSMTC.dll
+          # curl -L -o librespot.exe  https://github.com/Taiko2k/Tauon/releases/download/v7.8.3/librespot.exe # v0.6.0 - https://github.com/librespot-org/librespot/releases
+          # curl -L -o TaskbarLib.tlb https://github.com/Taiko2k/Tauon/releases/download/v7.8.3/TaskbarLib.tlb
+          # curl -L -o TauonSMTC.dll  https://github.com/Taiko2k/Tauon/releases/download/v7.8.3/TauonSMTC.dll
+          curl -L -o librespot.exe  https://github.com/deep-soft/Tauon/releases/download/optionals/librespot.exe
+          curl -L -o TaskbarLib.tlb https://github.com/deep-soft/Tauon/releases/download/optionals/TaskbarLib.tlb
+          curl -L -o TaskbarLib.tlb https://github.com/deep-soft/Tauon/releases/download/optionals/TauonSMTC.dll
           mkdir fonts
           curl -L -o fonts/NotoSans-ExtraCondensed.ttf     https://github.com/notofonts/notofonts.github.io/raw/refs/heads/main/fonts/NotoSans/full/ttf/NotoSans-ExtraCondensed.ttf     # 800KB
           curl -L -o fonts/NotoSans-ExtraCondensedBold.ttf https://github.com/notofonts/notofonts.github.io/raw/refs/heads/main/fonts/NotoSans/full/ttf/NotoSans-ExtraCondensedBold.ttf # 800KB
@@ -614,7 +617,7 @@ jobs:
       - name: Process template release_body.md
         run: |
           sed -i 's|RELEASE_TAG|Tauon-${{ needs.get-info.outputs.date }}-${{ needs.get-info.outputs.shorthash }}|g' ${{ github.workspace }}/.github/release_body.md
-
+          sed -i 's|Taiko2k|deep-soft|g' ${{ github.workspace }}/.github/release_body.md
 
       - name: Create Release on GitHub
         id: create_release
