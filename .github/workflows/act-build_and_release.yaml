@@ -1,9 +1,9 @@
 name: Build and release
-# 2025-06-08 21:30
+# 2025-06-08 23:20
 
 on:
-  push:
-  pull_request:
+#  push:
+#  pull_request:
   workflow_dispatch:
 
 jobs:
