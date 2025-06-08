@@ -1,4 +1,4 @@
-name: Build and release
+name: act - Build and release
 # 2025-06-08 23:20
 
 on:
