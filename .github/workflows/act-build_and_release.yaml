@@ -1,8 +1,10 @@
 name: Build and release
+# 2025-06-08 21:30
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-linux:
@@ -507,8 +509,42 @@ jobs:
         run: |
           sed -i 's|{{ tauon_version }}|8.1.0|g' extra/setup.iss
 
+      - name: check 1 icon file location before create exe installer
+        continue-on-error: true
+        shell: cmd
+        run: \
+         dir C:\
+         dir C:\a
+         dir C:\a\Tauon
+         dir C:\a\Tauon\Tauon
+         dir C:\a\Tauon\Tauon\dist
+         dir C:\a\Tauon\Tauon\dist\TauonMusicBox
+         dir C:\a\Tauon\Tauon\dist\TauonMusicBox\_internal\
+         dir C:\a\Tauon\Tauon\dist\TauonMusicBox\_internal\assets\icon.ico
+
+      - name: check 2 icon file location before create exe installer
+        continue-on-error: true
+        shell: cmd
+        run: \
+         dir D:\
+         dir D:\a
+         dir D:\a\Tauon
+         dir D:\a\Tauon\Tauon
+         dir D:\a\Tauon\Tauon\dist
+         dir D:\a\Tauon\Tauon\dist\TauonMusicBox
+         dir D:\a\Tauon\Tauon\dist\TauonMusicBox\_internal\
+         dir D:\a\Tauon\Tauon\dist\TauonMusicBox\_internal\assets\icon.ico
+
+      - name: find TauonMusicBox\_internal\assets\icon.ico
+        continue-on-error: true
+        shell: msys2 {0}
+        run: \
+          find /c/a/ | grep TauonMusicBox.*icon.ico || true;
+          find /d/a/ | grep TauonMusicBox.*icon.ico || true;
+
       - name: Compile .ISS to .EXE Installer
         uses: Minionguyjpro/Inno-Setup-Action@v1.2.5
+        continue-on-error: true
         with:
           path: extra/setup.iss
           options: /O+
@@ -519,6 +555,7 @@ jobs:
 
       - name: Upload EXE installer
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: TauonMusicBox-windows-installer
           path: extra/Output/tauonsetup-8.1.0.exe
@@ -542,7 +579,7 @@ jobs:
           echo "fullhash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
 
   pre-release:
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    # if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: [get-info, build-linux, build-flatpak, build-windows, build-macos, build-macos-x64]
     runs-on: ubuntu-24.04
     steps:
