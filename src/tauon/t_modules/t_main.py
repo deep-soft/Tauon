@@ -295,6 +295,9 @@ if sys.platform == "darwin":
 if system == "Linux" and not macos and not msys:
 	from tauon.t_modules.t_dbus import Gnome
 
+if system == "Windows" or msys:
+	from lynxtray import SysTrayIcon
+
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
 class LoadImageAsset:
@@ -2600,7 +2603,7 @@ class PlayerCtl:
 			if track_id in pool:
 				pool.remove(track_id)
 
-	def play_target_rr(self) -> None:
+	def play_target_rr(self, play=True) -> None:
 		self.tauon.thread_manager.ready_playback()
 		self.playing_length = self.master_library[self.track_queue[self.queue_step]].length
 
@@ -2616,11 +2619,12 @@ class PlayerCtl:
 		self.start_time = self.master_library[self.track_queue[self.queue_step]].start_time
 		self.start_time_target = self.start_time
 		self.jump_time = random_start
-		self.playerCommand = "open"
-		if not self.prefs.use_jump_crossfade:
-			self.playerSubCommand = "now"
-		self.playerCommandReady = True
-		self.playing_state = 1
+		if play:
+			self.playerCommand = "open"
+			if not self.prefs.use_jump_crossfade:
+				self.playerSubCommand = "now"
+			self.playerCommandReady = True
+			self.playing_state = 1
 		self.radiobox.loaded_station = None
 
 		if self.tauon.stream_proxy.download_running:
@@ -2631,7 +2635,7 @@ class PlayerCtl:
 
 		self.deduct_shuffle(self.target_object.index)
 
-	def play_target(self, gapless: bool = False, jump: bool = False) -> None:
+	def play_target(self, gapless: bool = False, jump: bool = False, play=True) -> None:
 		self.tauon.thread_manager.ready_playback()
 
 		#logging.info(self.track_queue)
@@ -2657,13 +2661,13 @@ class PlayerCtl:
 				self.decode_time = 0
 				self.jump_time = t
 
-		self.playerCommand = "open"
-		if jump:  # and not prefs.use_jump_crossfade:
-			self.playerSubCommand = "now"
+		if play:
+			self.playerCommand = "open"
+			if jump:  # and not prefs.use_jump_crossfade:
+				self.playerSubCommand = "now"
+			self.playerCommandReady = True
+			self.playing_state = 1
 
-		self.playerCommandReady = True
-
-		self.playing_state = 1
 		self.update_change()
 		self.deduct_shuffle(target.index)
 
@@ -2725,6 +2729,13 @@ class PlayerCtl:
 		self.gui.pl_update = 1
 
 	def back(self) -> None:
+
+		play = True
+		if self.playing_state == 2 and not self.prefs.resume_on_jump:
+			play = False
+			self.playerCommand = "stop"
+			self.playerCommandReady = True
+
 		if self.playing_state < 3 and self.prefs.back_restarts and self.playing_time > 6:
 			self.seek_time(0)
 			self.render_playlist()
@@ -2760,11 +2771,11 @@ class PlayerCtl:
 			self.playlist_playing_position -= 1
 			self.track_queue.append(self.playing_playlist()[self.playlist_playing_position])
 			self.queue_step = len(self.track_queue) - 1
-			self.play_target(jump=True)
+			self.play_target(jump=True, play=play)
 
 		elif self.random_mode is True and self.queue_step > 0:
 			self.queue_step -= 1
-			self.play_target(jump=True)
+			self.play_target(jump=True, play=play)
 		else:
 			logging.info("BACK: NO CASE!")
 			self.show_current()
@@ -2807,6 +2818,7 @@ class PlayerCtl:
 		if len(self.track_queue) > 0:
 			self.left_time = self.playing_time
 			self.left_index = self.track_queue[self.queue_step]
+
 		previous_state = self.playing_state
 		self.playing_time = 0
 		self.decode_time = 0
@@ -3243,6 +3255,12 @@ class PlayerCtl:
 		self, rr: bool = False, quiet: bool = False, inplace: bool = False, end: bool = False,
 		force: bool = False, play: bool = True, dry: bool = False,
 	) -> int | None:
+
+		if self.playing_state == 2 and not self.prefs.resume_on_jump:
+			play = False
+			self.playerCommand = "stop"
+			self.playerCommandReady = True
+
 		# Spotify remote control mode
 		if not dry and self.tauon.spot_ctl.coasting:
 			self.tauon.spot_ctl.control("next")
@@ -3312,8 +3330,8 @@ class PlayerCtl:
 					self.track_queue.append(target_index)
 					self.queue_step = len(self.track_queue) - 1
 					# self.queue_target = len(self.track_queue) - 1
-					if play:
-						self.play_target(jump=not end)
+					#if play:
+					self.play_target(jump=not end, play=play)
 
 					#  Set the flag that we have entered the album
 					self.force_queue[0].album_stage = 1
@@ -3385,8 +3403,8 @@ class PlayerCtl:
 					self.track_queue.append(pl[self.playlist_playing_position])
 					self.queue_step = len(self.track_queue) - 1
 					# self.queue_target = len(self.track_queue) - 1
-					if play:
-						self.play_target(jump=not end)
+					#if play:
+					self.play_target(jump=not end, play=play)
 
 				if not ok_continue:
 					# It seems this item has expired, remove it and call advance again
@@ -3428,8 +3446,8 @@ class PlayerCtl:
 				self.track_queue.append(target_index)
 				self.queue_step = len(self.track_queue) - 1
 				# self.queue_target = len(self.track_queue) - 1
-				if play:
-					self.play_target(jump=not end)
+				#if play:
+				self.play_target(jump=not end, play=play)
 				del self.force_queue[0]
 				if q.auto_stop:
 					self.stop_mode = 1
@@ -3459,8 +3477,8 @@ class PlayerCtl:
 
 			self.track_queue.append(self.default_playlist[self.selected_in_playlist])
 			self.queue_step = len(self.track_queue) - 1
-			if play:
-				self.play_target(jump=not end)
+			#if play:
+			self.play_target(jump=not end, play=play)
 
 		# If random, jump to random track
 		elif (self.random_mode or rr) and len(self.playing_playlist()) > 0 and not (
@@ -3573,9 +3591,9 @@ class PlayerCtl:
 			if rr:
 				if dry:
 					return None
-				self.play_target_rr()
-			elif play:
-				self.play_target(jump=not end)
+				self.play_target_rr(play=play)
+			else:
+				self.play_target(jump=not end, play=play)
 
 
 		# If not random mode, Step down 1 on the playlist
@@ -3664,8 +3682,8 @@ class PlayerCtl:
 				#	 self.play_target_gapless(jump= not end)
 				# else:
 				self.queue_step = len(self.track_queue) - 1
-				if play:
-					self.play_target(jump=not end)
+				#if play:
+				self.play_target(jump=not end, play=play)
 
 		elif self.random_mode and (self.album_shuffle_mode or self.prefs.album_shuffle_lock_mode):
 			# Album shuffle mode
@@ -3693,8 +3711,8 @@ class PlayerCtl:
 					self.track_queue.append(self.playing_playlist()[self.playlist_playing_position])
 					self.queue_step = len(self.track_queue) - 1
 					# self.queue_target = len(self.track_queue) - 1
-					if play:
-						self.play_target(jump=not end)
+					#if play:
+					self.play_target(jump=not end, play=play)
 				else:
 					if dry:
 						return None
@@ -3716,15 +3734,15 @@ class PlayerCtl:
 							self.track_queue.append(self.playing_playlist()[a])
 							self.queue_step = len(self.track_queue) - 1
 							# self.queue_target = len(self.track_queue) - 1
-							if play:
-								self.play_target(jump=not end)
+							#if play:
+							self.play_target(jump=not end, play=play)
 							break
 						a = 0
 						self.playlist_playing_position = a
 						self.track_queue.append(self.playing_playlist()[a])
 						self.queue_step = len(self.track_queue) - 1
-						if play:
-							self.play_target(jump=not end)
+						#if play:
+						self.play_target(jump=not end, play=play)
 						# logging.info("THERE IS ONLY ONE ALBUM IN THE PLAYLIST")
 						# self.stop()
 		else:
@@ -3922,7 +3940,7 @@ class LastFMapi:
 			self.network.enable_rate_limit()
 			user = pylast.User(self.prefs.last_fm_username, self.network)
 			# username = user.get_name()
-			perf_timer.set()
+			self.tauon.perf_timer.set()
 			tracks = user.get_recent_tracks(None)
 
 			counts: dict[tuple[str, str], int] = {}
@@ -5684,6 +5702,7 @@ class Tauon:
 		self.lastfm                               = self.pctl.lastfm
 		self.lfm_scrobbler                        = self.pctl.lfm_scrobbler
 		self.artist_list_box                      = self.pctl.artist_list_box
+		self.guitar_chords                        = GuitarChords(tauon=self, mouse_wheel=self.inp.mouse_wheel, mouse_position=self.inp.mouse_position, window_size=self.window_size)
 		self.search_over                          = SearchOverlay(tauon=self)
 		self.stats_gen                            = GStats(tauon=self)
 		self.deco                                 = Deco(tauon=self)
@@ -13443,7 +13462,7 @@ class Tauon:
 					for i in reversed(range(len(playlist))):
 						t_time = self.star_store.get(playlist[i])
 						tr = self.pctl.get_track(playlist[i])
-						if tr.length > 0 and not value < t_time / tr.length:
+						if tr.length < 1 or not value < t_time / tr.length:
 							del playlist[i]
 
 			elif cm[:3] == "pc<":
@@ -19341,7 +19360,7 @@ class TimedLyricsRen:
 			font_size = 15
 			spacing = round(17 * self.gui.scale)
 			self.ddt.rect((self.window_size[0] - self.gui.rspw, y, self.gui.rspw, h), bg)
-			y += 25 * gui.scale
+			y += 25 * self.gui.scale
 		else:
 			bg = self.colours.playlist_panel_background
 			font_size = 17
@@ -29714,7 +29733,7 @@ class StandardPlaylist:
 					was = False
 					run = 0
 					duration = get_display_time(total_time)
-					colour = colours.folder_title
+					colour = copy.deepcopy(colours.folder_title)
 					colour.a = max(colour.a - 50, 0)
 
 					if prefs.append_total_time and duration:
@@ -35034,6 +35053,7 @@ class Showcase:
 		self.renderer      = tauon.renderer
 		self.lyrics_ren    = tauon.lyrics_ren
 		self.window_size   = tauon.window_size
+		self.guitar_chords = tauon.guitar_chords
 		self.showcase_menu = tauon.showcase_menu
 		self.lastfm_artist = None
 		self.artist_mode = False
@@ -35108,12 +35128,12 @@ class Showcase:
 			self.ddt.force_gray = True
 
 		# if not self.prefs.shuffle_lock:
-		#     if draw.button(_("Return"), 25 * self.gui.scale, self.window_size[1] - self.gui.panelBY - 40 * self.gui.scale,
-		#                    text_highlight_colour=bft, text_colour=bbt, backgound_colour=bbg,
-		#                    background_highlight_colour=bfg):
-		#         self.gui.switch_showcase_off = True
-		#         self.gui.update += 1
-		#         self.gui.update_layout = True
+		# 	if draw.button(_("Return"), 25 * self.gui.scale, self.window_size[1] - self.gui.panelBY - 40 * self.gui.scale,
+		# 			text_highlight_colour=bft, text_colour=bbt, backgound_colour=bbg,
+		# 			background_highlight_colour=bfg):
+		# 		self.gui.switch_showcase_off = True
+		# 		self.gui.update += 1
+		# 		self.gui.update_layout = True
 
 		# self.ddt.force_gray = True
 
@@ -35160,7 +35180,7 @@ class Showcase:
 				# self.tauon.drop_shadow.render(x + 5 * self.gui.scale, y + 5 * self.gui.scale, box + 10 * self.gui.scale, box + 10 * self.gui.scale)
 				self.ddt.rect(
 					(x - round(2 * self.gui.scale), y - round(2 * self.gui.scale), box + round(4 * self.gui.scale),
-					box + round(4 * self.gui.scale)), [60, 60, 60, 135])
+					box + round(4 * self.gui.scale)), ColourRGBA(60, 60, 60, 135))
 				self.ddt.rect((x, y, box, box), self.colours.playlist_panel_background)
 				rect = sdl3.SDL_FRect(round(x), round(y), round(box), round(box))
 				self.tauon.style_overlay.hole_punches.append(rect)
@@ -35197,25 +35217,24 @@ class Showcase:
 				timed_ready = self.tauon.timed_lyrics_ren.generate(track)
 
 			if timed_ready and track.lyrics:
-				# if not self.prefs.guitar_chords or guitar_chords.test_ready_status(track) != 1:
-				#
-				#     line = _("Prefer synced")
-				#     if self.prefs.prefer_synced_lyrics:
-				#         line = _("Prefer static")
-				#     if self.pctl.draw.button(line, 25 * self.gui.scale, self.window_size[1] - self.gui.panelBY - 70 * self.gui.scale,
-				#                    text_highlight_colour=bft, text_colour=bbt, background_colour=bbg,
-				#                    background_highlight_colour=bfg):
-				#         self.prefs.prefer_synced_lyrics ^= True
+				# if not self.prefs.guitar_chords or self.guitar_chords.test_ready_status(track) != 1:
+				# 	line = _("Prefer synced")
+				# 	if self.prefs.prefer_synced_lyrics:
+				# 		line = _("Prefer static")
+				# 	if self.pctl.draw.button(line, 25 * self.gui.scale, self.window_size[1] - self.gui.panelBY - 70 * self.gui.scale,
+				# 			text_highlight_colour=bft, text_colour=bbt, background_colour=bbg,
+				# 			background_highlight_colour=bfg):
+				# 		self.prefs.prefer_synced_lyrics ^= True
 
 				timed_ready = self.prefs.prefer_synced_lyrics
 
-			if self.prefs.guitar_chords and track.title and self.prefs.show_lyrics_showcase and guitar_chords.render(track, gcx, y):
-				if not guitar_chords.auto_scroll:
+			if self.prefs.guitar_chords and track.title and self.prefs.show_lyrics_showcase and self.guitar_chords.render(track, gcx, y):
+				if not self.guitar_chords.auto_scroll:
 					if self.pctl.draw.button(
 						_("Auto-Scroll"), 25 * self.gui.scale, self.window_size[1] - self.gui.panelBY - 70 * self.gui.scale,
 						text_highlight_colour=bft, text_colour=bbt, background_colour=bbg,
 						background_highlight_colour=bfg):
-						guitar_chords.auto_scroll = True
+						self.guitar_chords.auto_scroll = True
 			elif True and self.prefs.show_lyrics_showcase and timed_ready:
 				w = self.window_size[0] - (x + box) - round(30 * self.gui.scale)
 				self.tauon.timed_lyrics_ren.render(track.index, gcx, y, w=w)
@@ -36471,6 +36490,7 @@ def save_prefs(bag: Bag) -> None:
 	cf.update_value("spotify-prefer-web", prefs.launch_spotify_web)
 	cf.update_value("spotify-allow-local", prefs.launch_spotify_local)
 	cf.update_value("back-restarts", prefs.back_restarts)
+	cf.update_value("resume-on-advance", prefs.resume_on_jump)
 	cf.update_value("end-queue-stop", prefs.stop_end_queue)
 	cf.update_value("block-suspend", prefs.block_suspend)
 	cf.update_value("allow-video-formats", prefs.allow_video_formats)
@@ -36702,6 +36722,9 @@ def load_prefs(bag: Bag) -> None:
 	prefs.back_restarts = cf.sync_add(
 		"bool", "back-restarts", prefs.back_restarts,
 		"Pressing the back button restarts playing track on first press.")
+	prefs.resume_on_jump = cf.sync_add(
+		"bool", "resume-on-advance", prefs.resume_on_jump,
+		"When paused, pressing back or next button starts playback.")
 	prefs.stop_end_queue = cf.sync_add(
 		"bool", "end-queue-stop", prefs.stop_end_queue,
 		"Queue will always enable auto-stop on last track")
@@ -37268,28 +37291,55 @@ def coll_point(l: list[int], r: list[int]) -> bool:
 	return r[0] < l[0] <= r[0] + r[2] and r[1] <= l[1] <= r[1] + r[3]
 
 def find_synced_lyric_data(track: TrackClass) -> list[str] | None:
+	"""Return list of strings if lyrics match LRC format, otherwise return None
+
+	See https://en.wikipedia.org/wiki/LRC_(file_format)"""
 	if track.synced:
 		return track.synced.splitlines()
 	if track.is_network:
 		return None
 
-	direc = track.parent_folder_path
-	name = os.path.splitext(track.filename)[0] + ".lrc"
+	# Check if internal track lyrics are synced lyrics
+	if len(track.lyrics) > 20:
+		split_lines = track.lyrics.splitlines()
+		LRC_tags = "ti", "ar", "al", "au", "lr", "length", "by", "offset", "re", "tool", "ve"
+		# Check first line that's not empty or a commennt
+		for line in split_lines:
+			if line == "" or line[0] == "#":
+				continue
 
-	if len(track.lyrics) > 20 and track.lyrics[0] == "[" and ":" in track.lyrics[:20] and "." in track.lyrics[:20]:
-		return track.lyrics.splitlines()
+			if line[0] == "[" and ":" in line[:10] \
+			and ("." in line[:10] or any(tag in line for tag in LRC_tags)) \
+			and "]" in line:
+				return split_lines
+			break
 
-	try:
-		if os.path.isfile(os.path.join(direc, name)):
-			with open(os.path.join(direc, name), encoding="utf-8") as f:
+
+	# Check if we have a .LRC file
+	direc = Path(track.parent_folder_path)
+	name = os.path.splitext(track.filename)[0]
+
+	# Case-insensitive file check
+	matched_file = next(
+		(
+			f for f in direc.iterdir()
+			if f.is_file()
+			and f.stem == name
+			and f.suffix.lower() == ".lrc"
+		),
+		None,
+	)
+
+	if matched_file:
+		try:
+			with matched_file.open(encoding="utf-8") as f:
 				data = f.readlines()
-		else:
+		except Exception:
+			logging.exception("Read lyrics file error")
 			return None
-	except Exception:
-		logging.exception("Read lyrics file error")
-		return None
+		return data
 
-	return data
+	return None
 
 def close_all_menus() -> None:
 	for menu in Menu.instances:
@@ -40293,9 +40343,9 @@ def main(holder: Holder) -> None:
 			value = GLib.Variant("s", t_id)
 			tauon.song_notification.set_hint("desktop-entry", value)
 
-	deco = Deco(tauon)
-	deco.get_themes = get_themes
-	deco.renderer = renderer
+	# TODO(Martin): Get rid of this and define it properly
+	tauon.deco.get_themes = get_themes
+	tauon.deco.renderer = renderer
 
 	if prefs.backend != 4:
 		prefs.backend = 4
@@ -40320,9 +40370,6 @@ def main(holder: Holder) -> None:
 	subsonic = tauon.subsonic
 	koel     = tauon.koel
 	tau      = tauon.tau
-
-	if system == "Windows" or tauon.msys:
-		from lynxtray import SysTrayIcon
 
 	tray = STray(tauon)
 
@@ -40629,10 +40676,9 @@ def main(holder: Holder) -> None:
 	showcase_menu.add(MenuItem(_("Search for Lyrics"), tauon.get_lyric_wiki, tauon.search_lyrics_deco, pass_ref=True, pass_ref_deco=True))
 	showcase_menu.add(MenuItem("Toggle synced", tauon.toggle_synced_lyrics, tauon.toggle_synced_lyrics_deco, pass_ref=True, pass_ref_deco=True))
 
-	guitar_chords = GuitarChords(tauon=tauon, mouse_wheel=inp.mouse_wheel, mouse_position=inp.mouse_position, window_size=window_size)
-	showcase_menu.add(MenuItem(_("Search GuitarParty"), guitar_chords.search_guitarparty, pass_ref=True, show_test=tauon.chord_lyrics_paste_show_test))
-	showcase_menu.add(MenuItem(_("Paste Chord Lyrics"), guitar_chords.paste_chord_lyrics, pass_ref=True, show_test=tauon.chord_lyrics_paste_show_test))
-	showcase_menu.add(MenuItem(_("Clear Chord Lyrics"), guitar_chords.clear_chord_lyrics, pass_ref=True, show_test=tauon.chord_lyrics_paste_show_test))
+	showcase_menu.add(MenuItem(_("Search GuitarParty"), tauon.guitar_chords.search_guitarparty, pass_ref=True, show_test=tauon.chord_lyrics_paste_show_test))
+	showcase_menu.add(MenuItem(_("Paste Chord Lyrics"), tauon.guitar_chords.paste_chord_lyrics, pass_ref=True, show_test=tauon.chord_lyrics_paste_show_test))
+	showcase_menu.add(MenuItem(_("Clear Chord Lyrics"), tauon.guitar_chords.clear_chord_lyrics, pass_ref=True, show_test=tauon.chord_lyrics_paste_show_test))
 
 	showcase_menu.add(MenuItem(_("Toggle Lyrics"), tauon.toggle_lyrics, tauon.toggle_lyrics_deco, pass_ref=True, pass_ref_deco=True))
 	showcase_menu.add_sub(_("Misc…"), 150)
@@ -40737,6 +40783,7 @@ def main(holder: Holder) -> None:
 
 	tab_menu.add(MenuItem(_("Regenerate"), tauon.regen_playlist_async, tauon.regenerate_deco, pass_ref=True, pass_ref_deco=True, hint="Alt+R"))
 	tab_menu.add_sub(_("Generate…"), 150)
+	tab_menu.add(MenuItem(_("Edit Generator..."), tauon.edit_generator_box, pass_ref=True))
 	tab_menu.add_sub(_("Sort…"), 170)
 	extra_tab_menu.add_sub(_("From Current…"), 133)
 	# tab_menu.add(_("Sort by Filepath"), standard_sort, pass_ref=True, disable_test=test_pl_tab_locked, pass_ref_deco=True)
@@ -40772,7 +40819,6 @@ def main(holder: Holder) -> None:
 	# tab_menu.add_to_sub(_('Quick Export XSPF'), 2, tauon.export_xspf, pass_ref=True)
 	# tab_menu.add_to_sub(_('Quick Export M3U'), 2, tauon.export_m3u, pass_ref=True)
 	tab_menu.add_to_sub(2, MenuItem(_("Toggle Breaks"), tauon.pl_toggle_playlist_break, pass_ref=True))
-	tab_menu.add_to_sub(2, MenuItem(_("Edit Generator..."), tauon.edit_generator_box, pass_ref=True))
 	tab_menu.add_to_sub(2, MenuItem(_("Engage Gallery Quick Add"), tauon.start_quick_add, pass_ref=True))
 	tab_menu.add_to_sub(2, MenuItem(_("Set as Sync Playlist"), tauon.set_sync_playlist, tauon.sync_playlist_deco, pass_ref_deco=True, pass_ref=True))
 	tab_menu.add_to_sub(2, MenuItem(_("Set as Downloads Playlist"), tauon.set_download_playlist, tauon.set_download_deco, pass_ref_deco=True, pass_ref=True))
@@ -42933,7 +42979,7 @@ def main(holder: Holder) -> None:
 					colours.__init__()
 
 					load_theme(colours, Path(theme_item[0]))
-					deco.load(colours.deco)
+					tauon.deco.load(colours.deco)
 					logging.info("Applying theme: " + gui.theme_name)
 
 					if colours.lm:
@@ -42966,7 +43012,7 @@ def main(holder: Holder) -> None:
 				colours.lm = False
 				colours.__init__()
 				colours.post_config()
-				deco.unload()
+				tauon.deco.unload()
 
 			if prefs.transparent_mode:
 				colours.apply_transparency()
