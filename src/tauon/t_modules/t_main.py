@@ -38,10 +38,10 @@ import gettext
 import glob
 import hashlib
 import io
+import importlib
 import json
 import locale as py_locale
 import logging
-
 #import magic
 import math
 
@@ -243,6 +243,22 @@ except ModuleNotFoundError:
 except Exception:
 	logging.exception("Unknown error trying to import natsort, playlists may not sort as intended!")
 
+try:
+	from tauon.t_modules.t_chrome import Chrome
+except ModuleNotFoundError as e:
+	logging.debug(f"pychromecast import error: {e}")
+	logging.warning("Unable to import Chrome(pychromecast), chromecast support will be disabled.")
+except Exception:
+	logging.exception("Unknown error trying to import Chrome(pychromecast), chromecast support will be disabled.")
+finally:
+	logging.debug("Found Chrome(pychromecast) for chromecast support")
+
+try:
+	# pyLast needs to be imported AFTER setup_tls() else pyinstaller breaks - we reimport it later
+	import pylast
+except Exception:
+	logging.exception("pyLast module not found, Last.fm support will be disabled.")
+
 if TYPE_CHECKING:
 	from ctypes import CDLL
 	from io import BufferedReader, BytesIO
@@ -381,7 +397,7 @@ class DConsole:
 	"""GUI console with logs"""
 
 	def __init__(self) -> None:
-		self.show:     bool      = False
+		self.show: bool = False
 
 	def toggle(self) -> None:
 		"""Toggle the GUI console with logs on and off"""
@@ -1261,10 +1277,13 @@ class ColoursClass:
 		self.bar_time = self.grey(70)
 
 		self.top_panel_background = self.grey(15)
-		self.status_text_over = rgb_add_hls(self.top_panel_background, 0, 0.83, 0)
-		self.status_text_normal = rgb_add_hls(self.top_panel_background, 0, 0.30, -0.15)
+		self.status_text_over: ColourRGBA | None = None
+		self.status_text_normal: ColourRGBA | None = None
+		
+
 
 		self.side_panel_background = self.grey(18)
+		self.lyrics_panel_background: ColourRGBA | None = None
 		self.gallery_background = self.side_panel_background
 		self.playlist_panel_background = self.grey(21)
 		self.bottom_panel_colour = self.grey(15)
@@ -1312,6 +1331,7 @@ class ColoursClass:
 		self.status_info_text = ColourRGBA(245, 205, 0, 255)
 		self.streaming_text = ColourRGBA(220, 75, 60, 255)
 		self.lyrics = self.grey(245)
+		self.active_lyric = ColourRGBA(255, 210, 50, 255)
 
 		self.corner_button        = ColourRGBA(255, 255, 255, 50)  # [60, 60, 60, 255]
 		self.corner_button_active = ColourRGBA(255, 255, 255, 230)  # [230, 230, 230, 255]
@@ -1387,10 +1407,18 @@ class ColoursClass:
 		if self.box_thumb_background is None:
 			self.box_thumb_background = alpha_mod(self.box_button_background, 175)
 
+		if self.lyrics_panel_background is None:
+			self.lyrics_panel_background = self.side_panel_background
+		if self.status_text_over is None:
+			self.status_text_over = rgb_add_hls(self.top_panel_background, 0, 0.83, 0)
+		if self.status_text_normal is None:
+			self.status_text_normal = rgb_add_hls(self.top_panel_background, 0, 0.30, -0.15)
+
 		# Pre calculate alpha blend for spec background
 		self.vis_bg.r = int(0.05 * 255 + (1 - 0.05) * self.top_panel_background.r)
 		self.vis_bg.g = int(0.05 * 255 + (1 - 0.05) * self.top_panel_background.g)
 		self.vis_bg.b = int(0.05 * 255 + (1 - 0.05) * self.top_panel_background.b)
+		self.vis_bg.a = int(0.05 * 255 + (1 - 0.05) * self.top_panel_background.a)
 
 		self.message_box_bg = self.box_background
 		self.sys_tab_bg = self.tab_background
@@ -2589,16 +2617,16 @@ class PlayerCtl:
 	def deduct_shuffle(self, track_id: int) -> None:
 		if self.multi_playlist and self.random_mode:
 			pl = self.multi_playlist[self.active_playlist_playing]
-			id = pl.uuid_int
+			pl_id = pl.uuid_int
 
-			if id not in self.shuffle_pools:
+			if pl_id not in self.shuffle_pools:
 				self.update_shuffle_pool(pl.uuid_int)
 
-			pool = self.shuffle_pools[id]
+			pool = self.shuffle_pools[pl_id]
 			if not pool:
-				del self.shuffle_pools[id]
+				del self.shuffle_pools[pl_id]
 				self.update_shuffle_pool(pl.uuid_int)
-			pool = self.shuffle_pools[id]
+			pool = self.shuffle_pools[pl_id]
 
 			if track_id in pool:
 				pool.remove(track_id)
@@ -4038,7 +4066,7 @@ class LastFMapi:
 			remote_loved = track.get_userloved()
 
 			if track_object.title != track.get_correction() or track_object.artist != track.get_artist().get_correction():
-				logging.warning(f"Pylast/lastfm bug workaround. API thought {track_object.artist} - {track_object.title} loved status was: {remote_loved}")
+				logging.warning(f"pyLast/Last.fm bug workaround. API thought {track_object.artist} - {track_object.title} loved status was: {remote_loved}")
 				return
 
 			if remote_loved is None:
@@ -4645,7 +4673,7 @@ class Chunker:
 
 class MenuIcon:
 
-	def __init__(self, asset) -> None:
+	def __init__(self, asset: WhiteModImageAsset | LoadImageAsset) -> None:
 		self.asset = asset
 		self.colour = ColourRGBA(170, 170, 170, 255)
 		self.base_asset = None
@@ -4674,8 +4702,8 @@ class MenuItem:
 		"sub_menu_width",  # 14
 	]
 	def __init__(
-		self, title: str, func, render_func=None, no_exit=False, pass_ref=False, hint=None, icon=None, show_test=None,
-		pass_ref_deco: bool = False, disable_test=None, set_ref=None, is_sub_menu: bool = False, args=None, sub_menu_number=None, sub_menu_width: int = 0,
+		self, title: str, func, render_func=None, no_exit: bool = False, pass_ref: bool = False, hint=None, icon: MenuIcon | None = None, show_test: Callable[..., bool] | None = None,
+		pass_ref_deco: bool = False, disable_test: Callable[..., bool] | None = None, set_ref: int | str | None = None, is_sub_menu: bool = False, args=None, sub_menu_number=None, sub_menu_width: int = 0,
 	) -> None:
 		self.title = title
 		self.is_sub_menu = is_sub_menu
@@ -4761,7 +4789,7 @@ class Menu:
 		self.rescale()
 
 		self.reference: int = 0
-		self.items: list[MenuItem | None]= []
+		self.items: list[MenuItem | None] = []
 		self.subs: list[list[MenuItem]] = []
 		self.selected = -1
 		self.up = False
@@ -4806,10 +4834,10 @@ class Menu:
 			menu_item.render_func = self.deco
 		self.subs[sub_menu_index].append(menu_item)
 
-	def test_item_active(self, item) -> bool:
+	def test_item_active(self, item: MenuItem) -> bool:
 		return not (item.show_test is not None and item.show_test(1) is False)
 
-	def is_item_disabled(self, item):
+	def is_item_disabled(self, item: MenuItem) -> bool | None:
 		if item.disable_test is not None:
 			if item.pass_ref_deco:
 				return item.disable_test(self.reference)
@@ -5551,6 +5579,7 @@ class Tauon:
 		self.window_size                  = bag.window_size
 		self.draw_border                  = holder.draw_border
 		self.desktop                      = bag.desktop
+		self.pid                          = os.getpid()
 		# List of encodings to check for with the fix mojibake function
 		self.encodings                    = ["cp932", "utf-8", "big5hkscs", "gbk"]  # These seem to be the most common for Japanese
 		self.column_names = (
@@ -8203,10 +8232,10 @@ class Tauon:
 			if track.file_ext == "M4A":
 				m4a_bitrates[track.bitrate] = m4a_bitrates.get(track.bitrate, 0) + 1
 
-			type = track.file_ext
-			if type == "OGA":
-				type = "OGG"
-			seen_types[type] = seen_types.get(type, 0) + 1
+			file_type = track.file_ext
+			if file_type == "OGA":
+				file_type = "OGG"
+			seen_types[file_type] = seen_types.get(file_type, 0) + 1
 
 			if track.fullpath and not track.is_network and track.fullpath not in seen_files:
 				size = track.size
@@ -8232,15 +8261,15 @@ class Tauon:
 		line += _("Track types:") + "\n"
 		if tracks_in_playlist:
 			types = sorted(seen_types, key=seen_types.get, reverse=True)
-			for type in types:
-				perc = round((seen_types.get(type) / tracks_in_playlist) * 100, 1)
+			for track_type in types:
+				perc = round((seen_types.get(track_type) / tracks_in_playlist) * 100, 1)
 				if perc < 0.1:
 					perc = "<0.1"
-				if type == "SPOT":
-					type = "SPOTIFY"
-				if type == "SUB":
-					type = "AIRSONIC"
-				line += f"{type} ({perc}%); "
+				if track_type == "SPOT":
+					track_type = "SPOTIFY"
+				if track_type == "SUB":
+					track_type = "AIRSONIC"
+				line += f"{track_type} ({perc}%); "
 		line = line.rstrip("; ")
 		line += "\n\n"
 
@@ -10797,7 +10826,7 @@ class Tauon:
 			playlist.sort(key=key, reverse=invert)
 		self.reload()
 
-	def stt2(sec: int) -> str:
+	def stt2(self, sec: int) -> str:
 		days, rem = divmod(sec, 86400)
 		hours, rem = divmod(rem, 3600)
 		min, sec = divmod(rem, 60)
@@ -10820,20 +10849,18 @@ class Tauon:
 		xport.write("Artist;Title;Album;Album artist;Track number;Type;Duration;Release date;Genre;Playtime;File path")
 
 		for index, track in self.pctl.master_library.items():
-
 			xport.write("\n")
-
 			xport.write(csv_string(track.artist) + ",")
 			xport.write(csv_string(track.title) + ",")
 			xport.write(csv_string(track.album) + ",")
 			xport.write(csv_string(track.album_artist) + ",")
 			xport.write(csv_string(track.track_number) + ",")
-			type = "File"
+			track_type = "File"
 			if track.is_network:
-				type = "Network"
+				track_type = "Network"
 			elif track.is_cue:
-				type = "CUE File"
-			xport.write(type + ",")
+				track_type = "CUE File"
+			xport.write(track_type + ",")
 			xport.write(str(track.length) + ",")
 			xport.write(csv_string(track.date) + ",")
 			xport.write(csv_string(track.genre) + ",")
@@ -11368,7 +11395,7 @@ class Tauon:
 					if current_state == 0 and idle_time.get() > 13:
 						logging.info("Pause discord RPC...")
 						self.gui.discord_status = "Idle"
-						RPC.clear(pid)
+						RPC.clear(self.pid)
 						# RPC.close()
 
 						while True:
@@ -11387,7 +11414,7 @@ class Tauon:
 					time.sleep(1)
 
 					if self.prefs.disconnect_discord:
-						RPC.clear(pid)
+						RPC.clear(self.pid)
 						RPC.close()
 						self.prefs.disconnect_discord = False
 						self.gui.discord_status = "Not connected"
@@ -11428,7 +11455,7 @@ class Tauon:
 						small_image = "tauon-standard"
 					RPC.update(
 						activity_type = ActivityType.LISTENING,
-						pid=pid,
+						pid=self.pid,
 						**({"state": artist} if not self.pctl.playing_state == 3 else {"state": album}),
 						details=title,
 						start=int(start_time),
@@ -11441,14 +11468,14 @@ class Tauon:
 					#logging.info("Discord RPC - Stop")
 					RPC.update(
 						activity_type = ActivityType.LISTENING,
-						pid=pid,
+						pid=self.pid,
 						state="Idle",
 						large_image="tauon-standard")
 
 				time.sleep(2)
 
 				if self.prefs.disconnect_discord:
-					RPC.clear(pid)
+					RPC.clear(self.pid)
 					RPC.close()
 					self.prefs.disconnect_discord = False
 					break
@@ -16551,7 +16578,7 @@ class Tauon:
 			prefs.tray_theme,
 			prefs.row_title_format,
 			prefs.row_title_genre,
-			prefs.row_title_separator_type,
+			prefs.row_title_separator_type,  # No longer used
 			prefs.replay_preamp,  # 181
 			prefs.gallery_combine_disc,
 			pctl.active_playlist_playing,  # 183
@@ -16683,7 +16710,6 @@ class Tauon:
 				self.gui.cursor_want = 3
 			if click:
 				webbrowser.open(link_pa[2], new=2, autoraise=True)
-				self.gui.track_box = True
 
 	def trunc_line(self, line: str, font: str, px: int, dots: bool = True) -> str:
 		"""This old function is slow and should be avoided"""
@@ -18912,21 +18938,21 @@ class GStats:
 	def __init__(self, tauon: Tauon) -> None:
 		self.pctl       = tauon.pctl
 		self.star_store = tauon.star_store
-		self.last_db = 0
-		self.last_pl = 0
-		self.artist_list = []
-		self.album_list = []
-		self.genre_list = []
-		self.genre_dict = {}
+		self.last_db: int = 0
+		self.last_pl: int = 0
+		self.artist_list: list[tuple[str, int]] = []
+		self.album_list:  list[tuple[str, int]] = []
+		self.genre_list:  list[tuple[str, int]] = []
+		self.genre_dict:   dict[str, list[int]] = {}
 
-	def update(self, playlist) -> None:
+	def update(self, playlist: int) -> None:
 		pt = 0
 
 		if self.pctl.master_count != self.last_db or self.last_pl != playlist:
 			self.last_db = self.pctl.master_count
 			self.last_pl = playlist
 
-			artists = {}
+			artists: dict[str, int] = {}
 
 			for index in self.pctl.multi_playlist[playlist].playlist_ids:
 				artist = self.pctl.master_library[index].artist
@@ -18949,8 +18975,8 @@ class GStats:
 
 			self.artist_list = copy.deepcopy(sorted_list)
 
-			genres = {}
-			genre_dict = {}
+			genres: dict[str, int] = {}
+			genre_dict: dict[str, list[int]] = {}
 
 			for index in self.pctl.multi_playlist[playlist].playlist_ids:
 				genre_r = self.pctl.master_library[index].genre
@@ -18984,7 +19010,6 @@ class GStats:
 				pt = int(pt / len(gn))
 
 				for genre in gn:
-
 					if genre.lower() in {"", "other", "unknown", "misc"}:
 						genre = "<Genre Unspecified>"
 					if genre.lower() in {"jpop", "japanese pop"}:
@@ -19032,7 +19057,7 @@ class GStats:
 
 			# logging.info('\n-----------------------\n')
 
-			g_albums = {}
+			g_albums: dict[str, int] = {}
 
 			for index in self.pctl.multi_playlist[playlist].playlist_ids:
 				album = self.pctl.master_library[index].album
@@ -19183,15 +19208,23 @@ class LyricsRenMini:
 		self.lyrics_position = 0
 
 	def generate(self, index, w) -> None:
-		self.text = self.pctl.master_library[index].lyrics
+		self.text = ""
+		
+		# LRC formatting search & destroy
+		for line in self.pctl.master_library[index].lyrics.split("\n"):
+			if len(line) < 10 or ( line[0] != "[" or line[9] != "]" and ":" not in line ) or "." not in line:
+				self.text += line + "\n"
+			else:
+				self.text += line[10:] + "\n"
 		self.lyrics_position = 0
 
 	def render(self, index, x, y, w, h, p) -> None:
-		if index != self.index or self.text != self.pctl.master_library[index].lyrics:
+		if index != self.index: # or self.text != self.pctl.master_library[index].lyrics:
 			self.index = index
 			self.generate(index, w)
 
-		colour = self.colours.side_bar_line1
+		colour = self.colours.lyrics
+		bg = self.colours.lyrics_panel_background
 
 		# if inp.key_ctrl_down:
 		#	 if inp.mouse_wheel < 0:
@@ -19199,7 +19232,7 @@ class LyricsRenMini:
 		#	 if inp.mouse_wheel > 0:
 		#		 prefs.lyrics_font_size -= 1
 
-		self.ddt.text((x, y, 4, w), self.text, colour, self.prefs.lyrics_font_size, w - (w % 2), self.colours.side_panel_background)
+		self.ddt.text((x, y, 4, w), self.text, colour, self.prefs.lyrics_font_size, w - (w % 2), bg)
 
 class LyricsRen:
 
@@ -19212,17 +19245,28 @@ class LyricsRen:
 		self.lyrics_position = 0
 
 	def test_update(self, track_object: TrackClass) -> None:
-		if track_object.index != self.index or self.text != track_object.lyrics:
+		if track_object.index != self.index: # or self.text != track_object.lyrics:
+			self.text = ""
 			self.index = track_object.index
-			self.text = track_object.lyrics
+			# old line: self.text = track_object.lyrics
+			# get rid of LRC formatting if you can:
+			for line in track_object.lyrics.split("\n"):
+				if len(line) < 10 or ( line[0] != "[" and line[9] != "]" or ":" not in line ) or "." not in line:
+					self.text += line + "\n"
+				else:
+					self.text += line[10:] + "\n"
+			# TODO (Flynn): fix the conditional for this section to run?
 			self.lyrics_position = 0
 
 	def render(self, x, y, w, h, p) -> None:
 		colour = self.colours.lyrics
-		if test_lumi(self.colours.gallery_background) < 0.5:
-			colour = self.colours.grey(40)
-
-		self.ddt.text((x, y, 4, w), self.text, colour, 17, w, self.colours.playlist_panel_background)
+		bg = self.colours.playlist_panel_background
+		
+		#colour = self.colours.grey(40)
+		# if test_lumi(self.colours.lyrics_panel_background) < 0.5:
+		#	colour = self.colours.grey(40)
+		# TODO (Flynn): this used to check the gallery backrgound & i don't even know why it did that much
+		self.ddt.text((x, y, 4, w), self.text, colour, 17, w, bg)
 
 class TimedLyricsToStatic:
 
@@ -19231,13 +19275,14 @@ class TimedLyricsToStatic:
 		self.cache_lyrics = ""
 
 	def get(self, track: TrackClass) -> str:
-		if track.lyrics:
-			return track.lyrics
 		if track.is_network:
 			return ""
 		if track == self.cache_key:
 			return self.cache_lyrics
-		data = find_synced_lyric_data(track)
+		if track.lyrics:
+			data = track.lyrics
+		else:
+			data = find_synced_lyric_data(track)
 
 		if data is None:
 			self.cache_lyrics = ""
@@ -19355,8 +19400,7 @@ class TimedLyricsRen:
 		highlight = True
 
 		if side_panel:
-			bg = self.colours.side_panel_background
-			bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
+			bg = self.colours.lyrics_panel_background
 			font_size = 15
 			spacing = round(17 * self.gui.scale)
 			self.ddt.rect((self.window_size[0] - self.gui.rspw, y, self.gui.rspw, h), bg)
@@ -19366,7 +19410,6 @@ class TimedLyricsRen:
 			font_size = 17
 			spacing = round(23 * self.gui.scale)
 
-		bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
 		test_time = self.tauon.get_real_time()
 
 		if self.pctl.track_queue[self.pctl.queue_step] == index:
@@ -19389,11 +19432,13 @@ class TimedLyricsRen:
 		for i, line in enumerate(self.data):
 			if 0 < yy < self.window_size[1]:
 				colour = self.colours.lyrics
-				if test_lumi(self.colours.gallery_background) < 0.5:
-					colour = self.colours.grey(40)
+				
+				#colour = self.colours.grey(70)
+				#if test_lumi(self.colours.gallery_background) < 0.5:
+				#	colour = self.colours.grey(40)
 
 				if i == line_active and highlight:
-					colour = ColourRGBA(255, 210, 50, 255)
+					colour = self.colours.active_lyric
 					if self.colours.lm:
 						colour = ColourRGBA(180, 130, 210, 255)
 
@@ -21040,6 +21085,7 @@ class AlbumArt:
 				#logging.info(x_colours)
 				colours.playlist_panel_bg = colours.side_panel_background
 				colours.playlist_box_background = colours.side_panel_background
+				colours.lyrics_panel_background = colours.side_panel_background
 
 				colours.playlist_panel_background = x_colours[0]
 				if len(x_colours) > 1:
@@ -22145,18 +22191,19 @@ class SubLyricsBox:
 class ExportPlaylistBox:
 
 	def __init__(self, tauon: Tauon) -> None:
-		self.tauon       = tauon
-		self.ddt         = tauon.ddt
-		self.gui         = tauon.gui
-		self.inp         = tauon.inp
-		self.coll        = tauon.coll
-		self.draw        = tauon.draw
-		self.pctl        = tauon.pctl
-		self.prefs       = tauon.prefs
-		self.fields      = tauon.fields
-		self.colours     = tauon.colours
-		self.pref_box    = tauon.pref_box
-		self.window_size = tauon.window_size
+		self.tauon        = tauon
+		self.ddt          = tauon.ddt
+		self.gui          = tauon.gui
+		self.inp          = tauon.inp
+		self.coll         = tauon.coll
+		self.draw         = tauon.draw
+		self.pctl         = tauon.pctl
+		self.prefs        = tauon.prefs
+		self.fields       = tauon.fields
+		self.colours      = tauon.colours
+		self.pref_box     = tauon.pref_box
+		self.window_size  = tauon.window_size
+		self.show_message = tauon.show_message
 		self.active = False
 		self.id = None
 		self.directory_text_box = TextBox2(tauon)
@@ -24696,7 +24743,7 @@ class Over:
 				(x + 0 * gui.scale, y),
 				_("They encourage you to contribute at {link}").format(link="https://fanart.tv"),
 				colours.box_text_label, 11)
-			self.tauon.link_activate(x, y, link_pa2)
+			self.tauon.link_activate(x, y, link_pa2, click=self.click)
 
 			y += 35 * gui.scale
 			prefs.enable_fanart_cover = self.toggle_square(
@@ -25820,19 +25867,24 @@ class Over:
 		x = x0 + self.item_x_offset
 		y = y0 + 17 * gui.scale
 
-		self.toggle_square(x, y, self.tauon.rating_toggle, _("Track ratings"))
-		y += round(25 * gui.scale)
-		self.toggle_square(x, y, self.tauon.album_rating_toggle, _("Album ratings"))
-		y += round(35 * gui.scale)
 
+
+
+		#y += round(35 * gui.scale)
 		self.toggle_square(x, y, self.tauon.heart_toggle, "     ")
 		gui.heart_row_icon.render(x + round(23 * gui.scale), y + round(2 * gui.scale), colours.box_text)
 		rect = (x, y + round(2 * gui.scale), 40 * gui.scale, 15 * gui.scale)
 		self.fields.add(rect)
 		if self.coll(rect):
 			self.tauon.ex_tool_tip(x + round(45 * gui.scale), y - 20 * gui.scale, 0, _("Show track loves"), 12)
+		y += round(25 * gui.scale)
 
-		x += (55 * gui.scale)
+		self.toggle_square(x, y, self.tauon.rating_toggle, _("Track ratings"))
+		y += round(25 * gui.scale)
+		self.toggle_square(x, y, self.tauon.album_rating_toggle, _("Album ratings"))
+		y += round(35 * gui.scale)
+
+
 		self.toggle_square(x, y, self.tauon.star_toggle, "     ")
 		gui.star_row_icon.render(x + round(22 * gui.scale), y + round(0 * gui.scale), colours.box_text)
 		rect = (x, y + round(2 * gui.scale), 40 * gui.scale, 15 * gui.scale)
@@ -25851,6 +25903,7 @@ class Over:
 			self.tauon.ex_tool_tip(x + round(35 * gui.scale), y - 20 * gui.scale, 0, _("Represent playcount as lines"), 12)
 
 		x = x0 + self.item_x_offset
+		#x += (55 * gui.scale)
 
 		# y += round(25 * gui.scale)
 
@@ -25882,12 +25935,12 @@ class Over:
 		self.toggle_square(x, y, self.tauon.toggle_append_total_time, _("Show album duration"))
 		y += round(35 * gui.scale)
 
-		if self.toggle_square(x, y, prefs.row_title_separator_type == 0, " - "):
-			prefs.row_title_separator_type = 0
-		if self.toggle_square(x + round(55 * gui.scale), y,  prefs.row_title_separator_type == 1, " ‒ "):
-			prefs.row_title_separator_type = 1
-		if self.toggle_square(x + round(110 * gui.scale), y,  prefs.row_title_separator_type == 2, " ⦁ "):
-			prefs.row_title_separator_type = 2
+		# if self.toggle_square(x, y, prefs.row_title_separator_type == 0, " - "):
+		# 	prefs.row_title_separator_type = 0
+		# if self.toggle_square(x + round(55 * gui.scale), y,  prefs.row_title_separator_type == 1, " ‒ "):
+		# 	prefs.row_title_separator_type = 1
+		# if self.toggle_square(x + round(110 * gui.scale), y,  prefs.row_title_separator_type == 2, " ⦁ "):
+		# 	prefs.row_title_separator_type = 2
 		x = x0 + 330 * gui.scale
 		y = y0 + 25 * gui.scale
 
@@ -26232,7 +26285,7 @@ class TopPanel:
 
 		# ---
 		self.space_left = 0
-		self.tab_text_spaces = []
+		self.tab_text_spaces: list[int] = []
 		self.index_playing = -1
 		self.drag_zone_start_x = 300 * self.gui.scale
 
@@ -26451,8 +26504,8 @@ class TopPanel:
 
 		# List all tabs eligible to be shown
 		#logging.info("-------------")
-		ready_tabs = []
-		show_tabs = []
+		ready_tabs: list[int] = []
+		show_tabs: list[int] = []
 
 		if prefs.tabs_on_top or gui.radio_view:
 			if gui.radio_view:
@@ -26468,8 +26521,8 @@ class TopPanel:
 				self.prime_tab = min(self.prime_tab, len(pctl.multi_playlist) - 1)
 			max_w = window_size[0] - (x + right_space_es + round(34 * gui.scale))
 
-			left_tabs = []
-			right_tabs = []
+			left_tabs: list[int] = []
+			right_tabs: list[int] = []
 			if prefs.shuffle_lock:
 				for p in ready_tabs:
 					left_tabs.append(p)
@@ -26613,7 +26666,6 @@ class TopPanel:
 		if gui.radio_view:
 			target = pctl.radio_playlists
 		for i, tab in enumerate(target):
-
 			if not gui.radio_view:
 				if not prefs.tabs_on_top or prefs.shuffle_lock:
 					break
@@ -26664,7 +26716,6 @@ class TopPanel:
 
 				# Drag to move playlist
 				if self.inp.mouse_up and tauon.playlist_box.drag and coll_point(self.inp.mouse_up_position, f_rect):
-
 					if gui.radio_view:
 						pctl.move_radio_playlist(tauon.playlist_box.drag_on, i)
 					else:
@@ -29604,11 +29655,12 @@ class StandardPlaylist:
 
 			if type == 1:
 				# Is type ALBUM TITLE
-				separator = " - "
-				if prefs.row_title_separator_type == 1:
-					separator = " ‒ "
-				if prefs.row_title_separator_type == 2:
-					separator = " ⦁ "
+				# separator = " - "
+				# if prefs.row_title_separator_type == 1:
+				# 	separator = " ‒ "
+				# if prefs.row_title_separator_type == 2:
+				# 	separator = " ⦁ "
+				separator = " ‒ "
 
 				date = ""
 				duration = ""
@@ -34032,8 +34084,7 @@ class MetaBox:
 			self.gui.showed_title = True
 
 	def lyrics(self, x: int, y: int, w: int, h: int, track: TrackClass) -> None:
-		bg = self.colours.side_panel_background
-		bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
+		bg = self.colours.lyrics_panel_background
 		self.ddt.rect((x, y, w, h), bg)
 		self.ddt.text_background_colour = bg
 
@@ -34086,15 +34137,13 @@ class MetaBox:
 			w - 50 * self.gui.scale,
 			None, 0)
 
-		self.ddt.rect((x, y + h - 1, w, 1), self.colours.side_panel_background)
+		self.ddt.rect((x, y + h - 1, w, 1), self.colours.lyrics_panel_background)
 
 		self.tauon.lyric_side_top_pulse.render(x, y, w - round(17 * self.gui.scale), 16 * self.gui.scale)
 		self.tauon.lyric_side_bottom_pulse.render(x, y + h, w - round(17 * self.gui.scale), 15 * self.gui.scale, bottom=True)
 
 	def draw(self, x: int, y: int, w: int, h: int, track=None) -> None:
-
 		bg = self.colours.side_panel_background
-		bg = ColourRGBA(bg.r, bg.g, bg.b, 255)
 		self.ddt.text_background_colour = bg
 		self.ddt.clear_rect((x, y, w, h))
 		self.ddt.rect((x, y, w, h), bg)
@@ -35211,7 +35260,7 @@ class Showcase:
 
 			gcx = x + box + int(self.window_size[0] * 0.15) + 10 * self.gui.scale
 			gcx -= 100 * self.gui.scale
-
+			# TODO (Flynn): work out the logic for full size static lyrics generating
 			timed_ready = False
 			if True and self.prefs.show_lyrics_showcase:
 				timed_ready = self.tauon.timed_lyrics_ren.generate(track)
@@ -36308,7 +36357,7 @@ def get_cert_path(holder: Holder) -> str:
 def setup_tls(holder: Holder) -> ssl.SSLContext:
 	"""TLS setup (needed for frozen installs)
 
-	This function has to be called BEFORE modules that init TLS context are imported or otherwise do so (like pylast)
+	This function has to be called BEFORE modules that init TLS context are imported or otherwise do so (like pylast - see https://github.com/Taiko2k/Tauon/issues/1442)
 	"""
 	# Set the TLS certificate path environment variable
 	cert_path = get_cert_path(holder)
@@ -38976,13 +39025,10 @@ def main(holder: Holder) -> None:
 	logging.info(f"Window size: {window_size}; Logical size: {logical_size}")
 
 	tls_context = setup_tls(holder)
-	try:
-		# Pylast needs to be imported AFTER setup_tls() else pyinstaller breaks
-		import pylast
-		last_fm_enable = True
-	except Exception:
-		logging.exception("PyLast module not found, last fm will be disabled.")
-		last_fm_enable = False
+	last_fm_enable = is_module_loaded("pylast")
+	if last_fm_enable:
+		# pyLast needs to be reimported AFTER setup_tls(), else pyinstaller breaks
+		importlib.reload(pylast)
 
 	discord_allow = is_module_loaded("lynxpresence", "ActivityType")
 	ctypes = sys.modules.get("ctypes")  # Fetch from loaded modules
@@ -39238,8 +39284,6 @@ def main(holder: Holder) -> None:
 	launch_prefix = ""
 	if flatpak_mode:
 		launch_prefix = "flatpak-spawn --host "
-
-	pid = os.getpid()
 
 	if not macos:
 		icon = sdl3.IMG_Load(str(asset_directory / "icon-64.png").encode())
@@ -40350,26 +40394,9 @@ def main(holder: Holder) -> None:
 	if prefs.backend != 4:
 		prefs.backend = 4
 
-	chrome = None
-
-	try:
-		from tauon.t_modules.t_chrome import Chrome
-		chrome = Chrome(tauon)
-	except ModuleNotFoundError as e:
-		logging.debug(f"pychromecast import error: {e}")
-		logging.warning("Unable to import Chrome(pychromecast), chromecast support will be disabled.")
-	except Exception:
-		logging.exception("Unknown error trying to import Chrome(pychromecast), chromecast support will be disabled.")
-	finally:
-		logging.debug("Found Chrome(pychromecast) for chromecast support")
-
-	tauon.chrome = chrome
-
-	plex     = tauon.plex
-	jellyfin = tauon.jellyfin
-	subsonic = tauon.subsonic
-	koel     = tauon.koel
-	tau      = tauon.tau
+	chrome_loaded = is_module_loaded("tauon.t_modules.t_chrome", "Chrome")
+	if chrome_loaded:
+		tauon.chrome = Chrome(tauon)
 
 	tray = STray(tauon)
 
@@ -42085,7 +42112,7 @@ def main(holder: Holder) -> None:
 				elif event.type == sdl3.SDL_EVENT_WINDOW_MINIMIZED:
 					gui.lowered = True
 					# if prefs.min_to_tray:
-					#     tray.down()
+					# 	tray.down()
 					# tauon.thread_manager.sleep()
 
 				elif event.type == sdl3.SDL_EVENT_WINDOW_RESTORED:
@@ -43674,7 +43701,7 @@ def main(holder: Holder) -> None:
 										else:
 											a = int(255 - 255 * (t - 0.5))
 
-										c = [c[1], c[2], c[0], a]
+										c = ColourRGBA(c.g, c.b, c.r, a)
 										ddt.rect_a((x - 5, y - 5), (tauon.album_mode_art_size + 10, tauon.album_mode_art_size + 10), c)  # [150, 80, 222, 255]
 
 										gui.update += 1
@@ -45501,7 +45528,7 @@ def main(holder: Holder) -> None:
 						gui.quick_search_mode = True
 					if tauon.search_clear_timer.get() > 3:
 						search_over.search_text.text = ""
-					input_text = ""
+					inp.input_text = ""
 				elif (keymaps.test("quick-find") or (
 						inp.key_esc_press and len(gui.editline) == 0)) or (inp.mouse_click and gui.quick_search_mode is True):
 					gui.quick_search_mode = False
@@ -46129,11 +46156,7 @@ def main(holder: Holder) -> None:
 					for i, value in enumerate(gui.spec2_buffers[0]):
 						ddt.rect(
 							[gui.spec2_position, i, 1, 1],
-							ColourRGBA(
-								min(255, prefs.spec2_base[0] + int(value * prefs.spec2_multiply[0])),
-								min(255, prefs.spec2_base[1] + int(value * prefs.spec2_multiply[1])),
-								min(255, prefs.spec2_base[2] + int(value * prefs.spec2_multiply[2])),
-								255))
+							colours.vis_bg)
 
 					del gui.spec2_buffers[0]
 
@@ -46167,7 +46190,9 @@ def main(holder: Holder) -> None:
 					sdl3.SDL_RenderTexture(renderer, gui.spec2_tex, None, gui.spec2_rec)
 
 				if pref_box.enabled:
-					ddt.rect((gui.spec2_rec.x, gui.spec2_rec.y, gui.spec2_rec.w, gui.spec2_rec.h), ColourRGBA(0, 0, 0, 90))
+					#ddt.rect((gui.spec2_rec.x, gui.spec2_rec.y, gui.spec2_rec.w, gui.spec2_rec.h), ColourRGBA(0, 0, 0, 90))
+					logging.info("spectrogram box")
+					ddt.rect((gui.spec2_rec.x, gui.spec2_rec.y, gui.spec2_rec.w, gui.spec2_rec.h), colours.vis_bg)
 
 			if gui.vis == 4 and gui.draw_vis4_top:
 				showcase.render_vis(True)
